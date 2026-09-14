@@ -13,7 +13,7 @@ import {
   EyeOff,
   FileBarChart,
   LayoutDashboard,
-  Map,
+  Map as MapIcon,
   Menu,
   MousePointer2,
   MoveHorizontal,
@@ -32,7 +32,6 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import NepalMap from "./components/NepalMap";
 import emblem from "./assets/nepal-emblem.png";
-import flag from "./assets/nepal-flag.png";
 
 const API_URL = "http://localhost:5000/api/municipalities";
 
@@ -85,7 +84,11 @@ function App() {
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [criticalOpen, setCriticalOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [mapExpanded, setMapExpanded] = useState(false);
+  const [selectedMunicipality, setSelectedMunicipality] = useState(null);
+  const [municipalityDetails, setMunicipalityDetails] = useState(null);
+  const [municipalityDetailsLoading, setMunicipalityDetailsLoading] =
+    useState(false);
+  const [municipalityDetailsError, setMunicipalityDetailsError] = useState("");
   const [access, setAccess] = useState(() => {
     try {
       const saved = localStorage.getItem("dgear-accessibility");
@@ -269,6 +272,72 @@ function App() {
     }, 0);
   }
 
+  async function openMunicipality(municipality) {
+    const municipalityId = Number(municipality?.municipality_id);
+
+    if (!Number.isInteger(municipalityId) || municipalityId <= 0) {
+      console.error("Invalid municipality ID:", municipality?.municipality_id);
+      return;
+    }
+
+    // Open the dialog immediately so the user gets feedback.
+    setSelectedMunicipality(municipality);
+    setMunicipalityDetails(null);
+    setMunicipalityDetailsError("");
+    setMunicipalityDetailsLoading(true);
+
+    try {
+      const detailUrl = `${API_URL}/details/${encodeURIComponent(municipalityId)}`;
+      console.log("Loading municipality details:", detailUrl);
+
+      const response = await fetch(detailUrl, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      const json = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          json?.message || `API returned HTTP ${response.status}`,
+        );
+      }
+
+      if (!json?.success || !json?.data) {
+        throw new Error(
+          "The municipality detail API returned an invalid response.",
+        );
+      }
+
+      // Expected API shape:
+      // { success: true, data: { municipality, assessment, indicators } }
+      const detail = json.data;
+
+      setMunicipalityDetails({
+        municipality: detail.municipality || {},
+        assessment: detail.assessment || {},
+        indicators: Array.isArray(detail.indicators) ? detail.indicators : [],
+      });
+    } catch (error) {
+      console.error("Municipality detail API error:", error);
+      setMunicipalityDetailsError(
+        error?.message ||
+          "Could not load the detailed assessment for this municipality.",
+      );
+    } finally {
+      setMunicipalityDetailsLoading(false);
+    }
+  }
+
+  function closeMunicipalityDetails() {
+    setSelectedMunicipality(null);
+    setMunicipalityDetails(null);
+    setMunicipalityDetailsError("");
+    setMunicipalityDetailsLoading(false);
+  }
+
   function resetAccessibility() {
     setAccess({ ...defaultAccess });
   }
@@ -277,28 +346,11 @@ function App() {
     function handleKeyDown(event) {
       if (event.key === "Escape") {
         setAccessOpen(false);
-        setMapExpanded(false);
-        setNotificationOpen(false);
-        setCriticalOpen(false);
-        setProfileOpen(false);
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  useEffect(() => {
-    function handlePointerDown(event) {
-      if (!event.target.closest(".header-action-wrap")) {
-        setNotificationOpen(false);
-        setCriticalOpen(false);
-        setProfileOpen(false);
-      }
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, []);
 
   function useAccessTool(key) {
@@ -360,7 +412,11 @@ function App() {
     <div className="app">
       <div className="top-bar">
         <div className="top-bar-left">
-          <img src={flag} alt="Nepal Flag" className="topbar-flag" />
+          <img
+            src="/src/assets/nepal-flag.png"
+            alt="Nepal Flag"
+            className="topbar-flag"
+          />
           <span>Government of Nepal</span>
         </div>
 
@@ -556,7 +612,7 @@ function App() {
           />
           <MobileNav
             text="Nepal Map"
-            icon={<Map size={18} />}
+            icon={<MapIcon size={18} />}
             onClick={() => navigateTo("map", "map-section")}
             active={activeNav === "map"}
           />
@@ -603,7 +659,7 @@ function App() {
               onClick={() => navigateTo("dashboard", "dashboard-top")}
             />
             <NavItem
-              icon={<Map size={18} />}
+              icon={<MapIcon size={18} />}
               text="Nepal Map"
               active={activeNav === "map"}
               onClick={() => navigateTo("map", "map-section")}
@@ -691,7 +747,7 @@ function App() {
                 title="PROVINCES COVERED"
                 value={loading ? "—" : stats.provinceCount}
                 description="Provinces represented in assessments"
-                icon={<Map size={24} />}
+                icon={<MapIcon size={24} />}
               />
 
               <StatCard
@@ -722,20 +778,14 @@ function App() {
                 <div className="card-header">
                   <div className="card-header-text">
                     <h3>
-                      <Map size={19} className="inline-icon" />
+                      <MapIcon size={19} className="inline-icon" />
                       Municipal Digital Readiness Map
                     </h3>
 
                     <p>Geographic distribution of assessed municipalities</p>
                   </div>
 
-                  <button
-                    className="view-map-button"
-                    onClick={() => setMapExpanded(true)}
-                    type="button"
-                  >
-                    View Full Map
-                  </button>
+                  <button className="view-map-button">View Full Map</button>
                 </div>
 
                 <div className="map-container">
@@ -818,11 +868,32 @@ function App() {
 
                     <tbody>
                       {filteredMunicipalities.map((item, index) => (
-                        <tr key={`${item.municipality_name}-${index}`}>
+                        <tr
+                          key={`${item.municipality_name}-${index}`}
+                          className="municipality-row"
+                          onClick={() => openMunicipality(item)}
+                          tabIndex={0}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openMunicipality(item);
+                            }
+                          }}
+                          title="Click to view municipality assessment details"
+                        >
                           <td>{item.province_name || "—"}</td>
 
                           <td className="municipality-name">
-                            {item.municipality_name || "—"}
+                            <button
+                              type="button"
+                              className="municipality-link"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openMunicipality(item);
+                              }}
+                            >
+                              {item.municipality_name || "—"}
+                            </button>
                           </td>
 
                           <td>{formatNumber(item.total_score)}</td>
@@ -989,36 +1060,160 @@ function App() {
         </main>
       </div>
 
-      {mapExpanded && (
+      {selectedMunicipality && (
         <div
-          className="map-modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Full Nepal readiness map"
+          className="municipality-modal-overlay"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              setMapExpanded(false);
+              closeMunicipalityDetails();
             }
           }}
         >
-          <section className="map-modal">
-            <div className="map-modal-header">
+          <section
+            className="municipality-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="municipality-detail-title"
+          >
+            <div className="municipality-modal-header">
               <div>
-                <h2>National Digital Readiness Map</h2>
-                <p>{stats.municipalityCount} municipalities assessed</p>
+                <div className="municipality-modal-kicker">
+                  MUNICIPALITY ASSESSMENT
+                </div>
+                <h2 id="municipality-detail-title">
+                  {municipalityDetails?.municipality?.municipality_name ||
+                    selectedMunicipality.municipality_name}
+                </h2>
+                <p>
+                  {municipalityDetails?.municipality?.province_name ||
+                    selectedMunicipality.province_name ||
+                    "Province unavailable"}
+                </p>
               </div>
+
               <button
-                type="button"
-                className="map-modal-close"
-                onClick={() => setMapExpanded(false)}
-                aria-label="Close full map"
+                className="municipality-modal-close"
+                onClick={closeMunicipalityDetails}
+                aria-label="Close municipality details"
               >
-                <X size={25} />
+                <X size={26} />
               </button>
             </div>
-            <div className="map-modal-body">
-              <NepalMap />
-            </div>
+
+            {municipalityDetailsLoading ? (
+              <div className="municipality-detail-loading">
+                Loading assessment details...
+              </div>
+            ) : municipalityDetailsError ? (
+              <div className="municipality-detail-error">
+                {municipalityDetailsError}
+              </div>
+            ) : municipalityDetails ? (
+              <>
+                <div className="municipality-summary-grid">
+                  <div>
+                    <span>Total Score</span>
+                    <strong>
+                      {formatNumber(
+                        municipalityDetails.assessment?.total_score,
+                      )}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Readiness</span>
+                    <strong>
+                      {municipalityDetails.assessment?.readiness_percentage !=
+                      null
+                        ? `${formatNumber(
+                            municipalityDetails.assessment.readiness_percentage,
+                          )}%`
+                        : "—"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Level</span>
+                    <strong
+                      className={`detail-level ${getLevelClass(
+                        municipalityDetails.assessment?.readiness_level,
+                      )}`}
+                    >
+                      {municipalityDetails.assessment?.readiness_level || "—"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Assessment Year</span>
+                    <strong>
+                      {municipalityDetails.assessment?.assessment_year || "—"}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="municipality-detail-section">
+                  <div className="municipality-detail-heading">
+                    <h3>Assessment Dimensions</h3>
+                    <p>
+                      Scores are loaded directly from this municipality's
+                      assessment records.
+                    </p>
+                  </div>
+
+                  <div className="municipality-dimensions">
+                    {groupIndicatorsByCategory(
+                      municipalityDetails.indicators || [],
+                    ).map((group) => (
+                      <DimensionGroup
+                        key={group.category}
+                        category={group.category}
+                        indicators={group.indicators}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="municipality-detail-section municipality-meta">
+                  <div>
+                    <span>Municipality Type</span>
+                    <strong>
+                      {municipalityDetails.municipality?.municipality_type ||
+                        "—"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Population</span>
+                    <strong>
+                      {municipalityDetails.municipality?.population != null
+                        ? Number(
+                            municipalityDetails.municipality.population,
+                          ).toLocaleString()
+                        : "—"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Assessed By</span>
+                    <strong>
+                      {municipalityDetails.assessment?.assessed_by || "—"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Assessment Date</span>
+                    <strong>
+                      {municipalityDetails.assessment?.assessment_date
+                        ? new Date(
+                            municipalityDetails.assessment.assessment_date,
+                          ).toLocaleDateString()
+                        : "—"}
+                    </strong>
+                  </div>
+                </div>
+
+                {municipalityDetails.assessment?.remarks && (
+                  <div className="municipality-remarks">
+                    <strong>Assessment Remarks</strong>
+                    <p>{municipalityDetails.assessment.remarks}</p>
+                  </div>
+                )}
+              </>
+            ) : null}
           </section>
         </div>
       )}
@@ -1183,6 +1378,74 @@ function Dimension({ icon, name, score }) {
         <span style={{ width: `${score}%` }} />
       </div>
     </div>
+  );
+}
+
+function groupIndicatorsByCategory(indicators) {
+  const groups = new globalThis.Map();
+
+  indicators.forEach((indicator) => {
+    const category = indicator.category || "Other";
+
+    if (!groups.has(category)) {
+      groups.set(category, []);
+    }
+
+    groups.get(category).push(indicator);
+  });
+
+  return Array.from(groups, ([category, categoryIndicators]) => ({
+    category,
+    indicators: categoryIndicators,
+  }));
+}
+
+function DimensionGroup({ category, indicators }) {
+  const totalMax = indicators.reduce(
+    (sum, indicator) => sum + Number(indicator.max_score || 5),
+    0,
+  );
+
+  const totalScore = indicators.reduce(
+    (sum, indicator) => sum + Number(indicator.score || 0),
+    0,
+  );
+
+  const percentage = totalMax ? (totalScore / totalMax) * 100 : 0;
+
+  return (
+    <article className="municipality-dimension-group">
+      <div className="municipality-dimension-header">
+        <div>
+          <h4>{category}</h4>
+          <span>
+            {formatNumber(totalScore)} / {formatNumber(totalMax)}
+          </span>
+        </div>
+
+        <strong>{Math.round(percentage)}%</strong>
+      </div>
+
+      <div className="municipality-dimension-progress">
+        <span style={{ width: `${percentage}%` }} />
+      </div>
+
+      <div className="indicator-list">
+        {indicators.map((indicator) => (
+          <div className="indicator-row" key={indicator.indicator_id}>
+            <div className="indicator-info">
+              <strong>{indicator.indicator_name}</strong>
+              {indicator.description && <span>{indicator.description}</span>}
+            </div>
+
+            <div className="indicator-score">
+              <strong>{formatNumber(indicator.score)}</strong>
+              <span>/ {formatNumber(indicator.max_score)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </article>
   );
 }
 
